@@ -7,12 +7,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # اصلاح شده: استفاده از Node.js 22 برای سازگاری با Capacitor 8
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          # حذف کش برای جلوگیری از ارور نبود فایل لاک
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
