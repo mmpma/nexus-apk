@@ -1,4 +1,4 @@
-name: Build Nexus Ultimate APK
+name: Build Nexus Final APK
 
 on:
   workflow_dispatch:
@@ -11,12 +11,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -34,7 +32,6 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      # ۱. تنظیم آیکون اختصاصی و حذف وکتورها
       - name: Set Custom Icon
         run: |
           for dir in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
@@ -44,18 +41,17 @@ jobs:
           done
           find android/app/src/main/res -name "ic_launcher.xml" -delete
           find android/app/src/main/res -name "ic_launcher_round.xml" -delete
-          find android/app/src/main/res -name "ic_launcher_background.xml" -delete
-          find android/app/src/main/res -name "ic_launcher_foreground.xml" -delete
           rm -rf android/app/src/main/res/mipmap-anydpi-v26
 
-      # ۲. اضافه کردن تمامی پرمیشن‌ها (دوربین، صدا، حافظه، تصاویر)
       - name: Patch AndroidManifest
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          PERMS='<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+          # اضافه کردن ویژگی برای خواندن محتوای اشتراک گذاری شده
+          PERMS='<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />'
           sed -i "s|<uses-permission android:name=\"android.permission.INTERNET\" />|$PERMS|" "$MANIFEST"
+          # اجازه دادن به کوئری برای کلیپ بورد
+          sed -i 's|</application>|    <queries><intent><action android:name="android.intent.action.SEND" /><data android:mimeType="image/*" /></intent></queries>\n</application>|' "$MANIFEST"
 
-      # ۳. اصلاح MainActivity (لینک‌های خارجی، خروج، کلیپ‌بورد)
       - name: Patch MainActivity
         run: |
           MAIN=$(find android -name "MainActivity.java" | head -1)
@@ -76,6 +72,8 @@ jobs:
           import android.content.Context;
           import android.util.Base64;
           import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import java.io.InputStream;
           import java.io.ByteArrayOutputStream;
           import com.getcapacitor.BridgeActivity;
           import com.getcapacitor.BridgeWebViewClient;
@@ -84,37 +82,9 @@ jobs:
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-
-                  // امنیت: قفل اسکرین‌شات
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
-
                   WebView webView = getBridge().getWebView();
                   webView.addJavascriptInterface(new ClipboardInterface(), "NativeClipboard");
-
-                  // مدیریت لینک‌های خارجی و فرمت‌های فایل
-                  webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
-                      @Override
-                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                          String url = request.getUrl().toString();
-                          String host = request.getUrl().getHost();
-
-                          // باز کردن تمام لینک‌های خارج از دامین سایت در مرورگر
-                          if (host != null && !host.contains("noxhub.ir")) {
-                              startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                              return true;
-                          }
-
-                          // باز کردن فرمت‌های دانلودی در مرورگر
-                          String lowUrl = url.toLowerCase();
-                          if (lowUrl.endsWith(".zip") || lowUrl.endsWith(".rar") || lowUrl.endsWith(".pdf") || 
-                              lowUrl.endsWith(".apk") || lowUrl.endsWith(".mp4") || lowUrl.endsWith(".mp3") ||
-                              lowUrl.contains("download")) {
-                              startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                              return true;
-                          }
-                          return super.shouldOverrideUrlLoading(view, request);
-                      }
-                  });
               }
 
               public class ClipboardInterface {
@@ -122,20 +92,46 @@ jobs:
                   public String getClipboardImage() {
                       try {
                           ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                          if (clipboard.hasPrimaryClip()) {
-                              ClipData clip = clipboard.getPrimaryClip();
-                              if (clip != null && clip.getItemCount() > 0) {
-                                  Uri imageUri = clip.getItemAt(0).getUri();
-                                  if (imageUri != null) {
-                                      Bitmap bitmap = android.provider.MediaStore.Images.Media.getBitmap(getContentResolver(), imageUri);
-                                      ByteArrayOutputStream out = new ByteArrayOutputStream();
-                                      bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
-                                      return "data:image/png;base64," + Base64.encodeToString(out.toByteArray(), Base64.DEFAULT);
-                                  }
-                              }
+                          if (!clipboard.hasPrimaryClip()) return "";
+                          ClipData clip = clipboard.getPrimaryClip();
+                          if (clip == null || clip.getItemCount() == 0) return "";
+                          
+                          ClipData.Item item = clip.getItemAt(0);
+                          Uri imageUri = item.getUri();
+                          
+                          // اگر مستقیماً URI نداشت، سعی میکنیم از متن یا HTML بگیریم
+                          if (imageUri == null && item.getText() != null) {
+                              imageUri = Uri.parse(item.getText().toString());
                           }
-                      } catch (Exception e) { return ""; }
+
+                          if (imageUri != null) {
+                              // باز کردن دسترسی موقت برای خواندن
+                              getContentResolver().takePersistableUriPermission(imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                              InputStream is = getContentResolver().openInputStream(imageUri);
+                              Bitmap bitmap = BitmapFactory.decodeStream(is);
+                              is.close();
+                              
+                              ByteArrayOutputStream out = new ByteArrayOutputStream();
+                              bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
+                              return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+                          }
+                      } catch (Exception e) { 
+                          // تلاش مجدد با متد ساده‌تر اگر اولی شکست خورد
+                          return trySimpleRead(); 
+                      }
                       return "";
+                  }
+
+                  private String trySimpleRead() {
+                      try {
+                          ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                          Uri uri = clipboard.getPrimaryClip().getItemAt(0).getUri();
+                          InputStream is = getContentResolver().openInputStream(uri);
+                          Bitmap b = BitmapFactory.decodeStream(is);
+                          ByteArrayOutputStream out = new ByteArrayOutputStream();
+                          b.compress(Bitmap.CompressFormat.JPEG, 80, out);
+                          return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+                      } catch (Exception e) { return ""; }
                   }
 
                   @JavascriptInterface
@@ -153,5 +149,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-Ultimate-APK
+          name: Nexus-Final-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
