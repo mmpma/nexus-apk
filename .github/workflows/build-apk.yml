@@ -36,6 +36,7 @@ jobs:
             cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
             cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
           done
+
       - name: Remove default vector icons
         run: |
           find android/app/src/main/res -name "ic_launcher.xml" -delete
@@ -46,6 +47,7 @@ jobs:
 
       - name: Patch MainActivity
         run: |
+          mkdir -p android/app/src/main/java/ir/nexus/noxhub
           cat > android/app/src/main/java/ir/nexus/noxhub/MainActivity.java << 'EOF'
           package ir.nexus.noxhub;
 
@@ -73,7 +75,6 @@ jobs:
                   WebView webView = getBridge().getWebView();
                   webView.getSettings().setAllowContentAccess(true);
                   webView.getSettings().setAllowFileAccess(true);
-                  webView.getSettings().setClipboardEnabled(true);
 
                   webView.setWebViewClient(new WebViewClient() {
                       @Override
@@ -104,66 +105,6 @@ jobs:
               }
           }
           EOF
-
-      - name: Patch WebView for offline and clipboard
-        run: |
-          BRIDGE="android/capacitor-android/capacitor/src/main/java/com/getcapacitor/Bridge.java"
-          # inject offline page via WebViewClient override in MainActivity
-          cat >> android/app/src/main/java/ir/nexus/noxhub/MainActivity.java << 'EOF'
-          EOF
-
-      - name: Patch offline error page
-        run: |
-          cat > android/app/src/main/java/ir/nexus/noxhub/MainActivity.java << 'EOF'
-          package ir.nexus.noxhub;
-
-          import android.os.Bundle;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import android.webkit.WebResourceError;
-          import android.webkit.WebResourceRequest;
-          import android.webkit.WebChromeClient;
-          import android.view.WindowManager;
-          import com.getcapacitor.BridgeActivity;
-
-          public class MainActivity extends BridgeActivity {
-
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-
-                  getWindow().setFlags(
-                      WindowManager.LayoutParams.FLAG_SECURE,
-                      WindowManager.LayoutParams.FLAG_SECURE
-                  );
-
-                  WebView webView = getBridge().getWebView();
-
-                  webView.getSettings().setAllowContentAccess(true);
-                  webView.getSettings().setAllowFileAccess(true);
-                  webView.getSettings().setClipboardEnabled(true);
-
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public void onReceivedError(WebView view, WebResourceRequest request,
-                                                  WebResourceError error) {
-                          if (request.isForMainFrame()) {
-                              view.loadUrl("file:///android_asset/public/offline.html");
-                          }
-                      }
-                  });
-              }
-
-              @Override
-              public void onBackPressed() {
-                  WebView webView = getBridge().getWebView();
-                  if (webView != null && webView.canGoBack()) {
-                      webView.goBack();
-                  }
-              }
-          }
-          EOF
-
 
       - name: Build APK
         run: |
