@@ -1,4 +1,4 @@
-name: Build Nexus Final APK
+name: Build Nexus Ultimate APK
 
 on:
   workflow_dispatch:
@@ -46,11 +46,13 @@ jobs:
       - name: Patch AndroidManifest
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          # اضافه کردن ویژگی برای خواندن محتوای اشتراک گذاری شده
+          # ۱. اضافه کردن پرمیشن‌ها
           PERMS='<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />'
           sed -i "s|<uses-permission android:name=\"android.permission.INTERNET\" />|$PERMS|" "$MANIFEST"
-          # اجازه دادن به کوئری برای کلیپ بورد
-          sed -i 's|</application>|    <queries><intent><action android:name="android.intent.action.SEND" /><data android:mimeType="image/*" /></intent></queries>\n</application>|' "$MANIFEST"
+          
+          # ۲. اضافه کردن تگ queries در مکان درست (قبل از تگ application)
+          QUERIES='<queries><intent><action android:name="android.intent.action.GET_CONTENT" /><data android:mimeType="image/*" /></intent></queries>'
+          sed -i "s|<application|$QUERIES\n    <application|" "$MANIFEST"
 
       - name: Patch MainActivity
         run: |
@@ -96,42 +98,19 @@ jobs:
                           ClipData clip = clipboard.getPrimaryClip();
                           if (clip == null || clip.getItemCount() == 0) return "";
                           
-                          ClipData.Item item = clip.getItemAt(0);
-                          Uri imageUri = item.getUri();
-                          
-                          // اگر مستقیماً URI نداشت، سعی میکنیم از متن یا HTML بگیریم
-                          if (imageUri == null && item.getText() != null) {
-                              imageUri = Uri.parse(item.getText().toString());
-                          }
-
+                          Uri imageUri = clip.getItemAt(0).getUri();
                           if (imageUri != null) {
-                              // باز کردن دسترسی موقت برای خواندن
-                              getContentResolver().takePersistableUriPermission(imageUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                              // متد جدید برای خواندن امن بدون نیاز به تعامل مستقیم در لحظه
                               InputStream is = getContentResolver().openInputStream(imageUri);
                               Bitmap bitmap = BitmapFactory.decodeStream(is);
                               is.close();
                               
                               ByteArrayOutputStream out = new ByteArrayOutputStream();
-                              bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out);
+                              bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out);
                               return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
                           }
-                      } catch (Exception e) { 
-                          // تلاش مجدد با متد ساده‌تر اگر اولی شکست خورد
-                          return trySimpleRead(); 
-                      }
-                      return "";
-                  }
-
-                  private String trySimpleRead() {
-                      try {
-                          ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                          Uri uri = clipboard.getPrimaryClip().getItemAt(0).getUri();
-                          InputStream is = getContentResolver().openInputStream(uri);
-                          Bitmap b = BitmapFactory.decodeStream(is);
-                          ByteArrayOutputStream out = new ByteArrayOutputStream();
-                          b.compress(Bitmap.CompressFormat.JPEG, 80, out);
-                          return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
                       } catch (Exception e) { return ""; }
+                      return "";
                   }
 
                   @JavascriptInterface
@@ -149,5 +128,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-Final-APK
+          name: Nexus-Fixed-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
