@@ -34,7 +34,7 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      # --- ۱. تنظیم آیکون اختصاصی ---
+      # ۱. تنظیم آیکون اختصاصی و حذف وکتورها
       - name: Set Custom Icon
         run: |
           for dir in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
@@ -48,13 +48,14 @@ jobs:
           find android/app/src/main/res -name "ic_launcher_foreground.xml" -delete
           rm -rf android/app/src/main/res/mipmap-anydpi-v26
 
-      # --- ۲. تنظیم دسترسی‌های مانیفست ---
+      # ۲. اضافه کردن تمامی پرمیشن‌ها (دوربین، صدا، حافظه، تصاویر)
       - name: Patch AndroidManifest
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />|' "$MANIFEST"
+          PERMS='<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />\n    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+          sed -i "s|<uses-permission android:name=\"android.permission.INTERNET\" />|$PERMS|" "$MANIFEST"
 
-      # --- ۳. تزریق کدهای جاوا (امنیت، دانلود، خروج، کلیپ‌بورد) ---
+      # ۳. اصلاح MainActivity (لینک‌های خارجی، خروج، کلیپ‌بورد)
       - name: Patch MainActivity
         run: |
           MAIN=$(find android -name "MainActivity.java" | head -1)
@@ -70,7 +71,6 @@ jobs:
           import android.webkit.WebResourceRequest;
           import android.webkit.WebView;
           import android.webkit.JavascriptInterface;
-          import android.widget.Toast;
           import android.content.ClipboardManager;
           import android.content.ClipData;
           import android.content.Context;
@@ -81,45 +81,42 @@ jobs:
           import com.getcapacitor.BridgeWebViewClient;
 
           public class MainActivity extends BridgeActivity {
-              private long backPressedTime = 0;
-
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  // قفل اسکرین‌شات
+                  // امنیت: قفل اسکرین‌شات
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
 
                   WebView webView = getBridge().getWebView();
-                  
-                  // فعال‌سازی پل ارتباطی کلیپ‌بورد برای JS
                   webView.addJavascriptInterface(new ClipboardInterface(), "NativeClipboard");
 
-                  // مدیریت دانلودها
+                  // مدیریت لینک‌های خارجی و فرمت‌های فایل
                   webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
                       @Override
                       public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                          String url = request.getUrl().toString().toLowerCase();
-                          boolean isFile = url.endsWith(".zip") || url.endsWith(".rar") || url.endsWith(".7z") ||
-                                         url.endsWith(".pdf") || url.endsWith(".apk") || url.endsWith(".exe") ||
-                                         url.endsWith(".mp4") || url.endsWith(".mkv") || url.endsWith(".mov") ||
-                                         url.endsWith(".mp3") || url.endsWith(".wav") || url.endsWith(".ogg") ||
-                                         url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".png") ||
-                                         url.endsWith(".gif") || url.contains("download") || url.contains("getfile");
+                          String url = request.getUrl().toString();
+                          String host = request.getUrl().getHost();
 
-                          if (isFile) {
-                              try {
-                                  Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                                  startActivity(intent);
-                                  return true;
-                              } catch (Exception e) { return super.shouldOverrideUrlLoading(view, request); }
+                          // باز کردن تمام لینک‌های خارج از دامین سایت در مرورگر
+                          if (host != null && !host.contains("noxhub.ir")) {
+                              startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                              return true;
+                          }
+
+                          // باز کردن فرمت‌های دانلودی در مرورگر
+                          String lowUrl = url.toLowerCase();
+                          if (lowUrl.endsWith(".zip") || lowUrl.endsWith(".rar") || lowUrl.endsWith(".pdf") || 
+                              lowUrl.endsWith(".apk") || lowUrl.endsWith(".mp4") || lowUrl.endsWith(".mp3") ||
+                              lowUrl.contains("download")) {
+                              startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                              return true;
                           }
                           return super.shouldOverrideUrlLoading(view, request);
                       }
                   });
               }
 
-              // کلاس رابط برای خواندن تصویر کلیپ‌بورد
               public class ClipboardInterface {
                   @JavascriptInterface
                   public String getClipboardImage() {
@@ -140,26 +137,13 @@ jobs:
                       } catch (Exception e) { return ""; }
                       return "";
                   }
-              }
 
-              @Override
-              public void onBackPressed() {
-                  WebView webView = getBridge().getWebView();
-                  if (webView != null && webView.canGoBack()) {
-                      webView.goBack();
-                  } else {
-                      if (System.currentTimeMillis() - backPressedTime < 2000) {
-                          finish(); 
-                      } else {
-                          backPressedTime = System.currentTimeMillis();
-                          Toast.makeText(this, "برای خروج دوباره بزنید", Toast.LENGTH_SHORT).show();
-                      }
-                  }
+                  @JavascriptInterface
+                  public void exitApp() { finish(); }
               }
           }
           JAVAEOF
 
-      # --- ۴. بیلد و آپلود ---
       - name: Build APK
         run: |
           cd android
