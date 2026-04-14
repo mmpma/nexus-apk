@@ -31,21 +31,106 @@ jobs:
 
       - name: Set logo
         run: |
-          mkdir -p android/app/src/main/res/mipmap-hdpi
-          mkdir -p android/app/src/main/res/mipmap-mdpi
-          mkdir -p android/app/src/main/res/mipmap-xhdpi
-          mkdir -p android/app/src/main/res/mipmap-xxhdpi
-          mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-          cp logo.png android/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          cp logo.png android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png
-          cp logo.png android/app/src/main/res/mipmap-mdpi/ic_launcher.png
-          cp logo.png android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png
-          cp logo.png android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
-          cp logo.png android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png
-          cp logo.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
-          cp logo.png android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
-          cp logo.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-          cp logo.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png
+          for dir in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-$dir
+            cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
+            cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
+          done
+
+      - name: Patch MainActivity
+        run: |
+          cat > android/app/src/main/java/ir/nexus/noxhub/MainActivity.java << 'EOF'
+          package ir.nexus.noxhub;
+
+          import android.os.Bundle;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.webkit.WebResourceError;
+          import android.webkit.WebResourceRequest;
+          import android.content.ClipboardManager;
+          import android.view.WindowManager;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  // اسکرین‌شات قفل
+                  getWindow().setFlags(
+                      WindowManager.LayoutParams.FLAG_SECURE,
+                      WindowManager.LayoutParams.FLAG_SECURE
+                  );
+              }
+
+              @Override
+              public void onBackPressed() {
+                  WebView webView = getBridge().getWebView();
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  }
+                  // بیرون نمیره
+              }
+          }
+          EOF
+
+      - name: Patch WebView for offline and clipboard
+        run: |
+          BRIDGE="android/capacitor-android/capacitor/src/main/java/com/getcapacitor/Bridge.java"
+          # inject offline page via WebViewClient override in MainActivity
+          cat >> android/app/src/main/java/ir/nexus/noxhub/MainActivity.java << 'EOF'
+          EOF
+
+      - name: Patch offline error page
+        run: |
+          cat > android/app/src/main/java/ir/nexus/noxhub/MainActivity.java << 'EOF'
+          package ir.nexus.noxhub;
+
+          import android.os.Bundle;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.webkit.WebResourceError;
+          import android.webkit.WebResourceRequest;
+          import android.view.WindowManager;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  // اسکرین‌شات قفل
+                  getWindow().setFlags(
+                      WindowManager.LayoutParams.FLAG_SECURE,
+                      WindowManager.LayoutParams.FLAG_SECURE
+                  );
+
+                  // آفلاین و کلیپبورد
+                  getBridge().getWebView().setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onReceivedError(WebView view, WebResourceRequest request,
+                                                  WebResourceError error) {
+                          if (request.isForMainFrame()) {
+                              view.loadUrl("file:///android_asset/public/offline.html");
+                          }
+                      }
+                  });
+
+                  // کلیپبورد تصاویر
+                  getBridge().getWebView().getSettings().setAllowContentAccess(true);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  WebView webView = getBridge().getWebView();
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  }
+              }
+          }
+          EOF
 
       - name: Build APK
         run: |
