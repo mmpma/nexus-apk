@@ -1,0 +1,9 @@
+{
+  "appId": "ir.nexus.noxhub",
+  "appName": "Nexus",
+  "webDir": "www",
+  "server": {
+    "url": "https://nexus.noxhub.ir",
+    "cleartext": false
+  }
+}
