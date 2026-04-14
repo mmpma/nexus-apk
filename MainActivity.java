@@ -1,5 +1,6 @@
 PACKAGE_PLACEHOLDER
 
+    
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
