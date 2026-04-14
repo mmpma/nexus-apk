@@ -7,117 +7,254 @@ on:
 
 jobs:
   build:
+
     runs-on: ubuntu-latest
 
     steps:
+
       - uses: actions/checkout@v4
-      - name: Setup Node.js
+
+
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: 22
+
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
-          distribution: 'temurin'
+          java-version: 21
+          distribution: temurin
+
 
       - name: Install dependencies
         run: |
           npm install
+          npm install @capacitor/core@8.3.0
           npm install @capacitor/android@8.3.0
 
-      - name: Create or Sync Android Project
+
+      - name: Create Android Project
         run: |
-          if [ -d "android" ]; then rm -rf android; fi
+          rm -rf android
           npx cap add android
           npx cap sync android
 
-      - name: Set Custom Icon
+
+      - name: Apply App Icon
         run: |
           for dir in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
             mkdir -p android/app/src/main/res/mipmap-$dir
             cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
             cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
           done
-          find android/app/src/main/res -name "ic_launcher.xml" -delete
-          find android/app/src/main/res -name "ic_launcher_round.xml" -delete
-          rm -rf android/app/src/main/res/mipmap-anydpi-v26
 
-      - name: Patch AndroidManifest
-        run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-          # ۱. اضافه کردن پرمیشن‌ها
-          PERMS='<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />'
-          sed -i "s|<uses-permission android:name=\"android.permission.INTERNET\" />|$PERMS|" "$MANIFEST"
-          
-          # ۲. اضافه کردن تگ queries در مکان درست (قبل از تگ application)
-          QUERIES='<queries><intent><action android:name="android.intent.action.GET_CONTENT" /><data android:mimeType="image/*" /></intent></queries>'
-          sed -i "s|<application|$QUERIES\n    <application|" "$MANIFEST"
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26 || true
 
-      - name: Patch MainActivity
+
+      - name: Patch AndroidManifest Permissions
         run: |
-          MAIN=$(find android -name "MainActivity.java" | head -1)
-          PKG_LINE=$(grep "^package" "$MAIN" | head -1)
-          
-          cat > "$MAIN" << JAVAEOF
-          ${PKG_LINE}
+
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+
+          sed -i '/<application/i\
+          <uses-permission android:name="android.permission.INTERNET"/>' $MANIFEST
+
+          sed -i '/<application/i\
+          <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>' $MANIFEST
+
+          sed -i '/<application/i\
+          <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>' $MANIFEST
+
+          sed -i '/<application/i\
+          <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>' $MANIFEST
+
+
+      - name: Patch MainActivity (Clipboard + Back + Screenshot Lock)
+        run: |
+
+          MAIN=$(find android -name MainActivity.java | head -1)
+
+          PKG=$(grep "^package" $MAIN)
+
+          cat > $MAIN <<EOF
+          $PKG
 
           import android.os.Bundle;
-          import android.content.Intent;
-          import android.net.Uri;
+          import android.os.Handler;
           import android.view.WindowManager;
-          import android.webkit.WebResourceRequest;
           import android.webkit.WebView;
-          import android.webkit.JavascriptInterface;
+          import android.widget.Toast;
+
           import android.content.ClipboardManager;
           import android.content.ClipData;
           import android.content.Context;
+          import android.net.Uri;
+          import android.content.Intent;
+
           import android.util.Base64;
           import android.graphics.Bitmap;
           import android.graphics.BitmapFactory;
+
           import java.io.InputStream;
           import java.io.ByteArrayOutputStream;
+
           import com.getcapacitor.BridgeActivity;
-          import com.getcapacitor.BridgeWebViewClient;
 
           public class MainActivity extends BridgeActivity {
+
+              private boolean doubleBackPressed = false;
+              private static final int PICK_IMAGE = 9001;
+
               @Override
               public void onCreate(Bundle savedInstanceState) {
+
                   super.onCreate(savedInstanceState);
-                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+
+                  getWindow().setFlags(
+                      WindowManager.LayoutParams.FLAG_SECURE,
+                      WindowManager.LayoutParams.FLAG_SECURE
+                  );
+
                   WebView webView = getBridge().getWebView();
-                  webView.addJavascriptInterface(new ClipboardInterface(), "NativeClipboard");
+
+                  webView.addJavascriptInterface(
+                      new ClipboardInterface(),
+                      "NativeClipboard"
+                  );
               }
 
-              public class ClipboardInterface {
-                  @JavascriptInterface
-                  public String getClipboardImage() {
-                      try {
-                          ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-                          if (!clipboard.hasPrimaryClip()) return "";
-                          ClipData clip = clipboard.getPrimaryClip();
-                          if (clip == null || clip.getItemCount() == 0) return "";
-                          
-                          Uri imageUri = clip.getItemAt(0).getUri();
-                          if (imageUri != null) {
-                              // متد جدید برای خواندن امن بدون نیاز به تعامل مستقیم در لحظه
-                              InputStream is = getContentResolver().openInputStream(imageUri);
-                              Bitmap bitmap = BitmapFactory.decodeStream(is);
-                              is.close();
-                              
-                              ByteArrayOutputStream out = new ByteArrayOutputStream();
-                              bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out);
-                              return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
-                          }
-                      } catch (Exception e) { return ""; }
-                      return "";
+              @Override
+              public void onBackPressed() {
+
+                  WebView webView = getBridge().getWebView();
+
+                  if(webView.canGoBack()){
+                      webView.goBack();
+                      return;
                   }
 
-                  @JavascriptInterface
-                  public void exitApp() { finish(); }
+                  if(doubleBackPressed){
+                      finishAffinity();
+                      return;
+                  }
+
+                  doubleBackPressed = true;
+
+                  Toast.makeText(
+                      this,
+                      "Press back again to exit",
+                      Toast.LENGTH_SHORT
+                  ).show();
+
+                  new Handler().postDelayed(() -> {
+                      doubleBackPressed = false;
+                  },1500);
+              }
+
+
+              public class ClipboardInterface {
+
+                  @android.webkit.JavascriptInterface
+                  public String getClipboardImage(){
+
+                      try{
+
+                          ClipboardManager clipboard =
+                              (ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);
+
+                          if(!clipboard.hasPrimaryClip())
+                              return "";
+
+                          ClipData clip = clipboard.getPrimaryClip();
+
+                          if(clip==null || clip.getItemCount()==0)
+                              return "";
+
+                          Uri uri = clip.getItemAt(0).getUri();
+
+                          if(uri==null)
+                              return "";
+
+                          InputStream stream =
+                              getContentResolver().openInputStream(uri);
+
+                          Bitmap bmp =
+                              BitmapFactory.decodeStream(stream);
+
+                          ByteArrayOutputStream output =
+                              new ByteArrayOutputStream();
+
+                          bmp.compress(Bitmap.CompressFormat.PNG,100,output);
+
+                          return "data:image/png;base64," +
+                              Base64.encodeToString(
+                                  output.toByteArray(),
+                                  Base64.NO_WRAP
+                              );
+
+                      }catch(Exception e){
+                          return "";
+                      }
+                  }
+
+
+                  @android.webkit.JavascriptInterface
+                  public void pickClipboardFallback(){
+
+                      Intent intent = new Intent(Intent.ACTION_PICK);
+
+                      intent.setType("image/*");
+
+                      startActivityForResult(intent,PICK_IMAGE);
+                  }
+              }
+
+
+              @Override
+              protected void onActivityResult(
+                  int requestCode,
+                  int resultCode,
+                  Intent data
+              ){
+
+                  super.onActivityResult(requestCode,resultCode,data);
+
+                  if(requestCode==PICK_IMAGE && data!=null){
+
+                      try{
+
+                          Uri uri=data.getData();
+
+                          InputStream stream=
+                              getContentResolver().openInputStream(uri);
+
+                          Bitmap bmp=
+                              BitmapFactory.decodeStream(stream);
+
+                          ByteArrayOutputStream output=
+                              new ByteArrayOutputStream();
+
+                          bmp.compress(Bitmap.CompressFormat.PNG,100,output);
+
+                          String base64=
+                              Base64.encodeToString(
+                                  output.toByteArray(),
+                                  Base64.NO_WRAP
+                              );
+
+                          getBridge().getWebView().evaluateJavascript(
+                              "window.onClipboardImage('data:image/png;base64,"+base64+"')",
+                              null
+                          );
+
+                      }catch(Exception ignored){}
+                  }
               }
           }
-          JAVAEOF
+          EOF
+
 
       - name: Build APK
         run: |
@@ -125,8 +262,9 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload Artifact
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-Fixed-APK
+          name: Nexus-Ultimate-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
