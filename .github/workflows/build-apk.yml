@@ -1,40 +1,165 @@
-name: Build Nexus App
-on: [push, workflow_dispatch]
+name: Build Nexus Ultimate APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
 
-      # ارتقا به نسخه 21 برای سازگاری با Capacitor 8
-      - name: Set up JDK 21
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           npm install
           npm install @capacitor/android@8.3.0
 
       - name: Create or Sync Android Project
         run: |
-          rm -rf android
+          if [ -d "android" ]; then rm -rf android; fi
           npx cap add android
           npx cap sync android
-          
-      - name: Generate Gradle Wrapper
-        run: |
-          cd android
-          gradle wrapper
 
+      # --- ۱. تنظیم آیکون اختصاصی ---
+      - name: Set Custom Icon
+        run: |
+          for dir in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p android/app/src/main/res/mipmap-$dir
+            cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
+            cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
+          done
+          find android/app/src/main/res -name "ic_launcher.xml" -delete
+          find android/app/src/main/res -name "ic_launcher_round.xml" -delete
+          find android/app/src/main/res -name "ic_launcher_background.xml" -delete
+          find android/app/src/main/res -name "ic_launcher_foreground.xml" -delete
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
+
+      # --- ۲. تنظیم دسترسی‌های مانیفست ---
+      - name: Patch AndroidManifest
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />|' "$MANIFEST"
+
+      # --- ۳. تزریق کدهای جاوا (امنیت، دانلود، خروج، کلیپ‌بورد) ---
+      - name: Patch MainActivity
+        run: |
+          MAIN=$(find android -name "MainActivity.java" | head -1)
+          PKG_LINE=$(grep "^package" "$MAIN" | head -1)
+          
+          cat > "$MAIN" << JAVAEOF
+          ${PKG_LINE}
+
+          import android.os.Bundle;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.view.WindowManager;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebView;
+          import android.webkit.JavascriptInterface;
+          import android.widget.Toast;
+          import android.content.ClipboardManager;
+          import android.content.ClipData;
+          import android.content.Context;
+          import android.util.Base64;
+          import android.graphics.Bitmap;
+          import java.io.ByteArrayOutputStream;
+          import com.getcapacitor.BridgeActivity;
+          import com.getcapacitor.BridgeWebViewClient;
+
+          public class MainActivity extends BridgeActivity {
+              private long backPressedTime = 0;
+
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  // قفل اسکرین‌شات
+                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+
+                  WebView webView = getBridge().getWebView();
+                  
+                  // فعال‌سازی پل ارتباطی کلیپ‌بورد برای JS
+                  webView.addJavascriptInterface(new ClipboardInterface(), "NativeClipboard");
+
+                  // مدیریت دانلودها
+                  webView.setWebViewClient(new BridgeWebViewClient(getBridge()) {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          String url = request.getUrl().toString().toLowerCase();
+                          boolean isFile = url.endsWith(".zip") || url.endsWith(".rar") || url.endsWith(".7z") ||
+                                         url.endsWith(".pdf") || url.endsWith(".apk") || url.endsWith(".exe") ||
+                                         url.endsWith(".mp4") || url.endsWith(".mkv") || url.endsWith(".mov") ||
+                                         url.endsWith(".mp3") || url.endsWith(".wav") || url.endsWith(".ogg") ||
+                                         url.endsWith(".jpg") || url.endsWith(".jpeg") || url.endsWith(".png") ||
+                                         url.endsWith(".gif") || url.contains("download") || url.contains("getfile");
+
+                          if (isFile) {
+                              try {
+                                  Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                                  startActivity(intent);
+                                  return true;
+                              } catch (Exception e) { return super.shouldOverrideUrlLoading(view, request); }
+                          }
+                          return super.shouldOverrideUrlLoading(view, request);
+                      }
+                  });
+              }
+
+              // کلاس رابط برای خواندن تصویر کلیپ‌بورد
+              public class ClipboardInterface {
+                  @JavascriptInterface
+                  public String getClipboardImage() {
+                      try {
+                          ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                          if (clipboard.hasPrimaryClip()) {
+                              ClipData clip = clipboard.getPrimaryClip();
+                              if (clip != null && clip.getItemCount() > 0) {
+                                  Uri imageUri = clip.getItemAt(0).getUri();
+                                  if (imageUri != null) {
+                                      Bitmap bitmap = android.provider.MediaStore.Images.Media.getBitmap(getContentResolver(), imageUri);
+                                      ByteArrayOutputStream out = new ByteArrayOutputStream();
+                                      bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+                                      return "data:image/png;base64," + Base64.encodeToString(out.toByteArray(), Base64.DEFAULT);
+                                  }
+                              }
+                          }
+                      } catch (Exception e) { return ""; }
+                      return "";
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  WebView webView = getBridge().getWebView();
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      if (System.currentTimeMillis() - backPressedTime < 2000) {
+                          finish(); 
+                      } else {
+                          backPressedTime = System.currentTimeMillis();
+                          Toast.makeText(this, "برای خروج دوباره بزنید", Toast.LENGTH_SHORT).show();
+                      }
+                  }
+              }
+          }
+          JAVAEOF
+
+      # --- ۴. بیلد و آپلود ---
       - name: Build APK
         run: |
           cd android
@@ -44,5 +169,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-Release-APK
+          name: Nexus-Ultimate-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
