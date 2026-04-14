@@ -36,6 +36,13 @@ jobs:
             cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher.png
             cp www/logo.png android/app/src/main/res/mipmap-$dir/ic_launcher_round.png
           done
+      - name: Remove default vector icons
+        run: |
+          find android/app/src/main/res -name "ic_launcher.xml" -delete
+          find android/app/src/main/res -name "ic_launcher_round.xml" -delete
+          find android/app/src/main/res -name "ic_launcher_background.xml" -delete
+          find android/app/src/main/res -name "ic_launcher_foreground.xml" -delete
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
 
       - name: Patch MainActivity
         run: |
