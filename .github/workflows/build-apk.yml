@@ -99,6 +99,7 @@ jobs:
           import android.webkit.WebViewClient;
           import android.webkit.WebResourceError;
           import android.webkit.WebResourceRequest;
+          import android.webkit.WebChromeClient;
           import android.view.WindowManager;
           import com.getcapacitor.BridgeActivity;
 
@@ -108,14 +109,18 @@ jobs:
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  // اسکرین‌شات قفل
                   getWindow().setFlags(
                       WindowManager.LayoutParams.FLAG_SECURE,
                       WindowManager.LayoutParams.FLAG_SECURE
                   );
 
-                  // آفلاین و کلیپبورد
-                  getBridge().getWebView().setWebViewClient(new WebViewClient() {
+                  WebView webView = getBridge().getWebView();
+
+                  webView.getSettings().setAllowContentAccess(true);
+                  webView.getSettings().setAllowFileAccess(true);
+                  webView.getSettings().setClipboardEnabled(true);
+
+                  webView.setWebViewClient(new WebViewClient() {
                       @Override
                       public void onReceivedError(WebView view, WebResourceRequest request,
                                                   WebResourceError error) {
@@ -124,9 +129,6 @@ jobs:
                           }
                       }
                   });
-
-                  // کلیپبورد تصاویر
-                  getBridge().getWebView().getSettings().setAllowContentAccess(true);
               }
 
               @Override
@@ -138,6 +140,7 @@ jobs:
               }
           }
           EOF
+
 
       - name: Build APK
         run: |
