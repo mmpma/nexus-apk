@@ -19,28 +19,30 @@ jobs:
           distribution: 'temurin'
 
       - name: Install Dependencies
-        run: npm install
+        run: |
+          npm install
+          npm install @capacitor/android@8.3.0
 
       - name: Create or Sync Android Project
         run: |
-          # اگر پوشه اندروید نیست، آن را بساز
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
-          # همگام‌سازی فایل‌های وب و تنظیمات
-          npx cap sync android
+          # حذف پوشه اندروید اگر از قبل وجود داشت برای اطمینان از سلامت بیلد
+          rm -rf android
+          # ایجاد مجدد پروژه اندروید
+          npx cap add android
+          # کپی کردن فایل‌های وب به پروژه
+          npx cap copy android
+          
+      - name: Generate Gradle Wrapper
+        run: |
+          # این بخش فایل gradlew را که مفقود شده بود تولید می‌کند
+          cd android
+          gradle wrapper
 
       - name: Build APK
         run: |
           cd android
-          # اطمینان از وجود فایل و دادن دسترسی
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-            ./gradlew assembleDebug
-          else
-            echo "Error: gradlew not found!"
-            exit 1
-          fi
+          chmod +x gradlew
+          ./gradlew assembleDebug
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
